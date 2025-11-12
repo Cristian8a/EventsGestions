@@ -7,8 +7,8 @@ def simulate_reminders(event_date: datetime):
     leads = database.get_all_leads()
     if not leads:
         print("No hay leads registrados todavía.")
-        return
-
+        return 
+    
     schedule_days = [23, 10, 3]
     for d in schedule_days:
         send_date = event_date - timedelta(days=d)

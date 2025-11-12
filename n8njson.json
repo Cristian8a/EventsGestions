@@ -1,0 +1,470 @@
+{
+  "name": "Event Backend - QR Registration & Check-in",
+  "active": false,
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Registration Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "event/registration",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "2",
+      "name": "Generate Lead & QR Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\n\nconst SECRET_KEY = 'CHANGE_ME_SECRET_KEY';\nconst EVENT_ID = 'CONFERENCIA_TECH_NOV25';\n\nfunction generateSalesforceLikeId() {\n  const prefix = '00Q';\n  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';\n  const chars2 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';\n  let middle = '';\n  for (let i = 0; i < 9; i++) {\n    middle += chars.charAt(Math.floor(Math.random() * chars.length));\n  }\n  let suffix = '';\n  for (let i = 0; i < 3; i++) {\n    suffix += chars2.charAt(Math.floor(Math.random() * chars2.length));\n  }\n  return prefix + middle + suffix;\n}\n\nconst itemsOut = [];\nfor (const item of items) {\n  const body = item.json;\n\n  if (!body.full_name || !body.email) {\n    throw new Error('Missing required fields: full_name or email');\n  }\n\n  const eventId = body.event_id || EVENT_ID;\n  const leadId = generateSalesforceLikeId();\n  const ts = Date.now().toString();\n\n  const baseString = eventId + leadId + ts + SECRET_KEY;\n  const hash = crypto.createHash('sha256').update(baseString).digest('hex');\n\n  const qrData = `EVENT:${eventId}|LEAD:${leadId}|TS:${ts}|HASH:${hash}`;\n\n  itemsOut.push({\n    json: {\n      leadId,\n      eventId,\n      ts,\n      qrData,\n      hash,\n      full_name: body.full_name,\n      email: body.email,\n      whatsapp: body.whatsapp || '',\n      company: body.company || '',\n      position: body.position || ''\n    }\n  });\n}\n\nreturn itemsOut;"
+      }
+    },
+    {
+      "id": "3",
+      "name": "Salesforce - Create Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        800,
+        260
+      ],
+      "parameters": {
+        "url": "https://YOUR_SF_INSTANCE.my.salesforce.com/services/data/v57.0/sobjects/Lead",
+        "method": "POST",
+        "authentication": "headerAuth",
+        "options": {},
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SF_ACCESS_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersJson": "{\n  \"LastName\": \"={{$json.full_name}}\",\n  \"Company\": \"={{$json.company || 'Individual'}}\",\n  \"Email\": \"={{$json.email}}\",\n  \"Phone\": \"={{$json.whatsapp}}\",\n  \"Status\": \"Registered\",\n  \"LeadSource\": \"Event Landing\",\n  \"Event__c\": \"={{$json.eventId}}\",\n  \"External_Lead_Id__c\": \"={{$json.leadId}}\",\n  \"QR_Data__c\": \"={{$json.qrData}}\"\n}"
+      }
+    },
+    {
+      "id": "4",
+      "name": "Generate QR (api.qrserver.com)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        800,
+        360
+      ],
+      "parameters": {
+        "url": "={{`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent($json.qrData)}`}}",
+        "method": "GET",
+        "responseFormat": "file",
+        "options": {}
+      }
+    },
+    {
+      "id": "5",
+      "name": "Send Registration Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        260
+      ],
+      "parameters": {
+        "fromEmail": "no-reply@yourdomain.com",
+        "toEmail": "={{$json.email}}",
+        "subject": "Confirmación de registro - Evento",
+        "text": "Hola {{$json.full_name}},\\n\\nGracias por registrarte al evento {{$json.eventId}}. Adjuntamos tu código QR.\\n\\nSaludos,",
+        "attachments": [
+          {
+            "binaryPropertyName": "data"
+          }
+        ]
+      }
+    },
+    {
+      "id": "6",
+      "name": "Send Registration WhatsApp (GoHighLevel)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        360
+      ],
+      "parameters": {
+        "url": "https://rest.gohighlevel.com/v1/conversations/messages",
+        "method": "POST",
+        "authentication": "headerAuth",
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GHL_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersJson": "{\n  \"type\": \"whatsapp\",\n  \"contactId\": \"REPLACE_WITH_GHL_CONTACT_ID\",\n  \"body\": \"Hola {{$json.full_name}}, gracias por registrarte al evento {{$json.eventId}}. Te hemos enviado tu QR por correo.\"\n}"
+      }
+    },
+    {
+      "id": "7",
+      "name": "Check-in Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        200,
+        700
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "event/checkin",
+        "responseMode": "onLastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "8",
+      "name": "Parse & Validate QR",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        500,
+        700
+      ],
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nconst SECRET_KEY = 'CHANGE_ME_SECRET_KEY';\nconst EXPECTED_EVENT_ID = 'CONFERENCIA_TECH_NOV25';\n\nfunction parseQR(qr) {\n  const parts = qr.split('|');\n  const data = {};\n  for (const p of parts) {\n    const [k, v] = p.split(':');\n    data[k] = v;\n  }\n  return data;\n}\n\nconst itemsOut = [];\nfor (const item of items) {\n  const body = item.json;\n  const qr = body.qr_data || body.qr || body.data;\n  if (!qr) {\n    throw new Error('Missing qr_data field in body');\n  }\n\n  const data = parseQR(qr);\n  const eventId = data.EVENT;\n  const leadId = data.LEAD;\n  const ts = data.TS;\n  const hash = data.HASH;\n\n  if (!eventId || !leadId || !ts || !hash) {\n    return [{ json: { ok: false, error: 'QR incompleto' } }];\n  }\n\n  if (eventId !== EXPECTED_EVENT_ID) {\n    return [{ json: { ok: false, error: 'QR pertenece a otro evento' } }];\n  }\n\n  const baseString = eventId + leadId + ts + SECRET_KEY;\n  const expectedHash = crypto.createHash('sha256').update(baseString).digest('hex');\n\n  if (expectedHash !== hash) {\n    return [{ json: { ok: false, error: 'Hash inválido (QR manipulado)' } }];\n  }\n\n  itemsOut.push({\n    json: {\n      ok: true,\n      eventId,\n      leadId,\n      ts,\n      qrRaw: qr\n    }\n  });\n}\n\nreturn itemsOut;"
+      }
+    },
+    {
+      "id": "9",
+      "name": "Salesforce - Get Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        800,
+        660
+      ],
+      "parameters": {
+        "url": "https://YOUR_SF_INSTANCE.my.salesforce.com/services/data/v57.0/query",
+        "method": "GET",
+        "authentication": "headerAuth",
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "q",
+              "value": "={{`SELECT Id, LastName, Company, Status FROM Lead WHERE External_Lead_Id__c = '${$json.leadId}' LIMIT 1`}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SF_ACCESS_TOKEN"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "10",
+      "name": "Salesforce - Mark Attended",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        660
+      ],
+      "parameters": {
+        "url": "={{`https://YOUR_SF_INSTANCE.my.salesforce.com/services/data/v57.0/sobjects/Lead/${$json.records[0].Id}`}}",
+        "method": "PATCH",
+        "authentication": "headerAuth",
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SF_ACCESS_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersJson": "{\n  \"Status\": \"Attended\",\n  \"Attendance_Date__c\": \"={{new Date().toISOString()}}\"\n}"
+      }
+    },
+    {
+      "id": "11",
+      "name": "Check-in Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        660
+      ],
+      "parameters": {
+        "functionCode": "const leadQuery = items[0].json;\nconst lead = leadQuery.records && leadQuery.records[0];\n\nif (!lead) {\n  return [{ json: { ok: false, error: 'Lead no encontrado en Salesforce' } }];\n}\n\nreturn [\n  {\n    json: {\n      ok: true,\n      message: 'Check-in exitoso',\n      leadName: lead.LastName,\n      company: lead.Company,\n      status: 'Attended',\n      attendanceTime: new Date().toISOString()\n    }\n  }\n];"
+      }
+    },
+    {
+      "id": "12",
+      "name": "Reminder Cron",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        200,
+        1000
+      ],
+      "parameters": {
+        "triggerTimes": [
+          {
+            "hour": 9,
+            "minute": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "13",
+      "name": "Salesforce - Get Registered Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        500,
+        1000
+      ],
+      "parameters": {
+        "url": "https://YOUR_SF_INSTANCE.my.salesforce.com/services/data/v57.0/query",
+        "method": "GET",
+        "authentication": "headerAuth",
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "q",
+              "value": "SELECT Id, LastName, Company, Email, Phone, Status, Event__c FROM Lead WHERE Status = 'Registered'"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SF_ACCESS_TOKEN"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "14",
+      "name": "Filter by Days to Event",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        800,
+        1000
+      ],
+      "parameters": {
+        "functionCode": "const EVENT_DATE = new Date('2025-11-20T09:00:00Z');\nconst now = new Date();\n\nconst diffDays = Math.round((EVENT_DATE - now) / (1000 * 60 * 60 * 24));\nconst allowed = [23, 10, 3];\n\nif (!allowed.includes(diffDays)) {\n  return [];\n}\n\nconst records = items[0].json.records || [];\nreturn records.map((r) => ({\n  json: {\n    diffDays,\n    Email: r.Email,\n    Phone: r.Phone,\n    LastName: r.LastName,\n    Event__c: r.Event__c\n  }\n}));"
+      }
+    },
+    {
+      "id": "15",
+      "name": "Send Reminder Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        940
+      ],
+      "parameters": {
+        "fromEmail": "no-reply@yourdomain.com",
+        "toEmail": "={{$json.Email}}",
+        "subject": "Recordatorio de evento",
+        "text": "Hola {{$json.LastName}}, faltan {{$json.diffDays}} días para tu evento {{$json.Event__c}}."
+      }
+    },
+    {
+      "id": "16",
+      "name": "Send Reminder WhatsApp (GoHighLevel)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        1060
+      ],
+      "parameters": {
+        "url": "https://rest.gohighlevel.com/v1/conversations/messages",
+        "method": "POST",
+        "authentication": "headerAuth",
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GHL_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersJson": "{\n  \"type\": \"whatsapp\",\n  \"contactId\": \"REPLACE_WITH_GHL_CONTACT_ID\",\n  \"body\": \"Hola {{$json.LastName}}, faltan {{$json.diffDays}} días para tu evento {{$json.Event__c}}.\"\n}"
+      }
+    }
+  ],
+  "connections": {
+    "Registration Webhook": {
+      "main": [
+        [
+          {
+            "node": "Generate Lead & QR Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Lead & QR Data": {
+      "main": [
+        [
+          {
+            "node": "Salesforce - Create Lead",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate QR (api.qrserver.com)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate QR (api.qrserver.com)": {
+      "main": [
+        [
+          {
+            "node": "Send Registration Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Registration WhatsApp (GoHighLevel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check-in Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate QR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate QR": {
+      "main": [
+        [
+          {
+            "node": "Salesforce - Get Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salesforce - Get Lead": {
+      "main": [
+        [
+          {
+            "node": "Salesforce - Mark Attended",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check-in Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salesforce - Mark Attended": {
+      "main": [
+        [
+          {
+            "node": "Check-in Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reminder Cron": {
+      "main": [
+        [
+          {
+            "node": "Salesforce - Get Registered Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salesforce - Get Registered Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter by Days to Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter by Days to Event": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Reminder WhatsApp (GoHighLevel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "versionId": "event-backend-v1"
+}
