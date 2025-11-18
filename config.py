@@ -16,3 +16,5 @@ QR_FOLDER = os.path.join(BASE_DIR, "data", "qr_codes")
 
 # si quieres forzar uso de api.qrserver.com en vez de qrcode local
 USE_REMOTE_QR = True  # pon False si quieres usar la librería qrcode
+
+CHECKIN_BASE_URL = "http://localhost:5000/checkin"  # Cambia al dominio real cuando esté desplegado

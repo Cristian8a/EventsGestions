@@ -15,4 +15,4 @@ def simulate_reminders(event_date: datetime):
         print(f"\n📅 Recordatorios D-{d} ({send_date.date()}):")
         for lead in leads:
             print(f"→ Enviar a {lead['email']} / {lead.get('whatsapp') or 'sin whatsapp'} "
-                  f"recordatorio para evento {EVENT_ID}")
+                  f"No te olvides de asistir al evento prrillo {EVENT_ID}")

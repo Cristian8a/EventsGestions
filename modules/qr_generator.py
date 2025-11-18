@@ -4,7 +4,7 @@ import hashlib
 import time
 import urllib.parse
 import requests
-from config import SECRET_KEY, QR_FOLDER, USE_REMOTE_QR
+from config import SECRET_KEY, QR_FOLDER, USE_REMOTE_QR, CHECKIN_BASE_URL
 from config import EVENT_ID
 from . import database
 
@@ -21,36 +21,38 @@ def build_qr_payload(event_id: str, lead_id: str) -> str:
 
 def generate_qr_for_lead(lead: dict) -> str:
     ensure_qr_folder()
-    qr_data = build_qr_payload(lead["event_id"], lead["lead_id"])
+    qr_payload = build_qr_payload(lead["event_id"], lead["lead_id"])
+
+    # 🔴 LO IMPORTANTE: el QR va a contener una URL con el payload como query
+    encoded_payload = urllib.parse.quote(qr_payload)
+    qr_url = f"{CHECKIN_BASE_URL}?q={encoded_payload}"
+
     filename = f"{lead['lead_id']}.png"
     filepath = os.path.join(QR_FOLDER, filename)
 
     if USE_REMOTE_QR:
-        # usamos api.qrserver.com
-        encoded = urllib.parse.quote(qr_data)
-        url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={encoded}"
+        encoded_url = urllib.parse.quote(qr_url)
+        url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={encoded_url}"
         resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
             with open(filepath, "wb") as f:
                 f.write(resp.content)
         else:
-            # fallback simple
             with open(filepath, "wb") as f:
                 f.write(resp.content)
     else:
-        # generación local
         import qrcode
-        img = qrcode.make(qr_data)
+        img = qrcode.make(qr_url)
         img.save(filepath)
 
-    # guardamos en la base
-    database.update_lead_qr(lead["lead_id"], qr_data)
+    # Guardas el payload “lógico” en la base (no la URL)
+    database.update_lead_qr(lead["lead_id"], qr_payload)
 
     print("\nQR Generado:")
-    print(qr_data)
+    print(qr_url)  # opcionalmente mostrar la URL
     print(f"📁 Guardado en: {filepath}")
     print(f"✉️  Email enviado con QR adjunto a {lead['email']} (simulado)")
     if lead.get("whatsapp"):
         print(f"📱 WhatsApp enviado al {lead['whatsapp']} (simulado)")
 
-    return qr_data
+    return qr_payload
